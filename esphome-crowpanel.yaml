@@ -1,0 +1,405 @@
+# ============================================================
+# CrowPanel 4.3" ESP32-S3
+# Device Builder 1.28.1
+# ESPHome 2026.11.0
+# ============================================================
+
+esphome:
+  name: crowpanel-43-2
+  friendly_name: Crowpanel-4.3-2
+  platformio_options:
+    board_build.flash_mode: dio
+    board_build.arduino.memory_type: qio_qspi
+    board_build.esp-idf.memory_type: qio_qspi
+
+esp32:
+  board: esp32-s3-devkitc-1
+  cpu_frequency: 240MHz
+  flash_size: 4MB
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_ESP32S3_DATA_CACHE_64KB: y
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+logger:
+  hardware_uart: UART0
+  level: DEBUG
+
+api:
+  encryption:
+    key: "key generated when creating the device in ESPHOME Builder"
+
+ota:
+  - platform: esphome
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Crowpanel-4.3-1 Fallback Hotspot"
+    password: "generated when creating the device"
+
+captive_portal:
+# ============================================================
+# TOUCHSCREEN SPI BUS
+# ============================================================
+
+spi:
+  clk_pin: GPIO12
+  mosi_pin: GPIO11
+  miso_pin: GPIO13
+
+# ============================================================
+# XPT2046 RESISTIVE TOUCHSCREEN
+# ============================================================
+
+touchscreen:
+  platform: xpt2046
+  id: my_touchscreen
+  display: main_display
+  cs_pin: GPIO0
+  interrupt_pin: GPIO36
+  update_interval: 50ms
+  threshold: 400
+
+  calibration:
+    x_min: 280
+    x_max: 3860
+    y_min: 340
+    y_max: 3860
+
+  on_touch:
+    then:
+      - logger.log:
+          format: "Touch detected: X=%d Y=%d"
+          args: [touch.x, touch.y]
+
+# ============================================================
+# LCD BACKLIGHT
+# ============================================================
+
+output:
+  - platform: ledc
+    pin: GPIO2
+    id: backlight_output
+
+light:
+  - platform: monochromatic
+    output: backlight_output
+    name: LCD Backlight
+    id: led
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+
+# ============================================================
+# DISPLAY
+# ============================================================
+
+display:
+  - platform: rpi_dpi_rgb
+    id: main_display
+    color_order: RGB
+    invert_colors: true
+    update_interval: never
+    auto_clear_enabled: false
+
+    dimensions:
+      width: 480
+      height: 270
+
+    de_pin: 40
+    hsync_pin: 39
+    vsync_pin: 41
+    pclk_pin: 42
+    pclk_frequency: 9MHz
+
+    hsync_pulse_width: 4
+    hsync_front_porch: 8
+    hsync_back_porch: 43
+
+    vsync_pulse_width: 4
+    vsync_front_porch: 8
+    vsync_back_porch: 14
+
+    data_pins:
+      red: [45, 48, 47, 21, 14]
+      green: [5, 6, 7, 15, 16, 4]
+      blue: [8, 3, 46, 9, 1]
+
+# ============================================================
+# HOME ASSISTANT TIME
+# ============================================================
+
+time:
+  - platform: homeassistant
+    id: time_comp
+
+    on_time_sync:
+      then:
+        - script.execute: update_clock
+
+    on_time:
+      - seconds: 0
+        minutes: /1
+        then:
+          - script.execute: update_clock
+
+# ============================================================
+# CLOCK UPDATE
+# ============================================================
+
+script:
+  - id: update_clock
+    then:
+      - lvgl.label.update:
+          id: time_label
+          text: !lambda 'return id(time_comp).now().strftime("%H:%M");'
+
+      - lvgl.label.update:
+          id: date_label
+          text: !lambda 'return id(time_comp).now().strftime("%a %d %b");'
+
+# ============================================================
+# HOME ASSISTANT SENSORS
+# ============================================================
+
+sensor:
+
+  # POWER CONSUMPTION
+
+  - platform: homeassistant
+    id: power_w
+    entity_id: sensor.enovos_import_power_act
+    internal: true
+
+    on_value:
+      then:
+        - lvgl.arc.update:
+            id: power_arc
+            value: !lambda 'return (int)(x * 100);'
+
+        - lvgl.label.update:
+            id: power_label
+            text: !lambda 'return str_sprintf("%.2f kW", x);'
+
+        - if:
+            condition:
+              lambda: 'return x < 3.0;'
+            then:
+              - lvgl.arc.update:
+                  id: power_arc
+                  indicator:
+                    arc_color: 0x00CC66
+            else:
+              - if:
+                  condition:
+                    lambda: 'return x < 10.0;'
+                  then:
+                    - lvgl.arc.update:
+                        id: power_arc
+                        indicator:
+                          arc_color: 0xFF9900
+                  else:
+                    - lvgl.arc.update:
+                        id: power_arc
+                        indicator:
+                          arc_color: 0xFF3333
+
+  # BATTERY
+
+  - platform: homeassistant
+    id: battery_pct
+    entity_id: sensor.aunilec_pv_niveau_de_charge
+    internal: true
+
+    on_value:
+      then:
+        - lvgl.arc.update:
+            id: battery_arc
+            value: !lambda 'return (int)x;'
+
+        - lvgl.label.update:
+            id: battery_label
+            text: !lambda 'return str_sprintf("%.0f %%", x);'
+
+  # OUTDOOR TEMPERATURE
+
+  - platform: homeassistant
+    id: outdoor_temp
+    entity_id: sensor.ws2900_v2_02_03_outdoor_temperature
+    internal: true
+
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: temp_label
+            text: !lambda 'return str_sprintf("%.1f C", x);'
+
+  # DAILY RAIN
+
+  - platform: homeassistant
+    id: rain_today
+    entity_id: sensor.ws2900_v2_02_03_daily_rain_rate
+    internal: true
+
+    on_value:
+      then:
+        - lvgl.label.update:
+            id: rain_label
+            text: !lambda 'return str_sprintf("Rain %.1f mm", x);'
+
+# ============================================================
+# OFFICE LIGHT STATE FROM HOME ASSISTANT
+# ============================================================
+
+text_sensor:
+  - platform: homeassistant
+    id: office_light_state
+    entity_id: switch.nspanel_1_relay_1
+
+    on_value:
+      then:
+        - lvgl.widget.update:
+            id: office_light_switch
+            state:
+              checked: !lambda 'return x == "on";'
+
+# ============================================================
+# LVGL DISPLAY
+# ============================================================
+
+lvgl:
+  bg_color: 0x000000
+  touchscreens:
+    - touchscreen_id: my_touchscreen
+  text_color: 0xFFFFFF
+  text_font: montserrat_20
+
+  widgets:
+
+    # CLOCK
+
+    - label:
+        id: time_label
+        align: TOP_LEFT
+        x: 12
+        y: 13
+        text_font: montserrat_40
+        text: "--:--"
+
+    # DATE
+
+    - label:
+        id: date_label
+        align: TOP_LEFT
+        x: 14
+        y: 59
+        text_color: 0xA0A0A0
+        text: "---"
+
+    # TEMPERATURE
+
+    - label:
+        id: temp_label
+        align: TOP_RIGHT
+        x: -12
+        y: 13
+        text_font: montserrat_40
+        text: "-- C"
+
+    # RAIN
+
+    - label:
+        id: rain_label
+        align: TOP_RIGHT
+        x: -14
+        y: 59
+        text_color: 0xA0A0A0
+        text: "Rain -- mm"
+
+    # POWER GAUGE
+
+    - arc:
+        id: power_arc
+        align: CENTER
+        x: -110
+        y: 45
+        width: 150
+        height: 150
+        min_value: 0
+        max_value: 2000
+        value: 0
+        adjustable: false
+        arc_color: 0x303030
+        arc_width: 12
+
+    - label:
+        id: power_label
+        align: CENTER
+        x: -110
+        y: 45
+        text_font: montserrat_20
+        text: "-- kW"
+
+    - label:
+        align: CENTER
+        x: -110
+        y: 105
+        text_color: 0xA0A0A0
+        text: "POWER"
+
+    # BATTERY GAUGE
+
+    - arc:
+        id: battery_arc
+        align: CENTER
+        x: 110
+        y: 45
+        width: 150
+        height: 150
+        min_value: 0
+        max_value: 100
+        value: 0
+        adjustable: false
+        arc_color: 0x303030
+        arc_width: 12
+        indicator:
+          arc_color: 0x00CC66
+
+    - label:
+        id: battery_label
+        align: CENTER
+        x: 110
+        y: 45
+        text_font: montserrat_20
+        text: "-- %"
+
+    - label:
+        align: CENTER
+        x: 110
+        y: 105
+        text_color: 0xA0A0A0
+        text: "BATTERY"
+
+
+    # OFFICE LIGHT SWITCH
+
+    - switch:
+        id: office_light_switch
+        align: BOTTOM_MID
+        y: -12
+        width: 75
+        height: 32
+
+        on_change:
+          then:
+            - logger.log:
+                format: "Sending toggle command to office relay"
+            - homeassistant.action:
+                action: switch.toggle
+                data:
+                  entity_id: switch.nspanel_1_relay_1
